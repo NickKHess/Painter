@@ -50,6 +50,12 @@ import com.nickkhess.painter.utils.Cuboid;
 
 public class Game {
 	
+	//TODO: Silverfish spawn blocks where there's meant to be air, maybe offset wrong?
+	//TODO: Score is still broken
+	//TODO: Score won't deplete if your blocks go away
+	//TODO: Fix first player's name not disappearing on score after game ends, but only when game starts
+	//TODO: You spawn too high
+
 	private int id;
 
 	private static World world = Bukkit.getWorld("Painter");
@@ -115,11 +121,6 @@ public class Game {
 		if(!isInGame(player)) {
 			if(players.size() < maxPlayers) {
 				if(phase < 1) {
-					if(players.size() == 0)
-						for(Player p : players) {
-							removeScore(p);
-							removePlayer(p, 0, true);
-						}
 					players.add(player);
 					Painter.players.add(player);
 
@@ -259,6 +260,8 @@ public class Game {
 			for(Player p : players) {
 				removeScore(p);
 				removePlayer(p, 0, true);
+				p.setScoreboard(scoreboardManager.getNewScoreboard());
+				scoreboard.resetScores(getChatColor(p) + p.getName());
 				p.setLevel(0);
 			}
 
@@ -578,7 +581,7 @@ public class Game {
 		return s;
 	}
 
-	public Player getPlayerByBlockType(Material material) {
+	public Player getPlayerByBlockMaterial(Material material) {
 		if(material.equals(Material.RED_WOOL))
 			return getPlayerByTeam("RED");
 		else if(material.equals(Material.BLUE_WOOL))
