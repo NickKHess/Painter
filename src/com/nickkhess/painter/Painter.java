@@ -45,7 +45,7 @@ public class Painter extends JavaPlugin {
 
 								if(Tag.WOOL.isTagged(block.getType())) {
 									game.setScore(player, game.getScore(player) + 1);
-									if(game.getPlayerByBlockMaterial(block.getType()) != null)
+									if(game.getPlayerByBlockType(block.getType()) != null)
 										game.setScore(player, game.getScore(player) + 1);
 								}
 

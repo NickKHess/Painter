@@ -4,6 +4,7 @@ import java.util.HashMap;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.Particle.DustOptions;
 import org.bukkit.Tag;
@@ -44,15 +45,25 @@ public class EventManager implements Listener {
 			Game game = Game.getGame(player);
 
 			if(player.getWorld().getName().equals("Painter")) {
-				if(Tag.WOOL.isTagged(down.getType())) {
-					if(game.getPlayerByBlockMaterial(down.getType()) != null)
-						game.setScore(player, game.getScore(player) + 1);
-					if(game.getPhase() == 0 || game.getPhase() == 1)
-						game.paint(player, false);
-					else if(game.getPhase() == 2)
-						game.paint(player, true);
+				Material type = down.getType();
+				if(Tag.WOOL.isTagged(type)) {
+					// Verify that the block underneath the player is NOT already of their type
+					if(!game.getPlayerBlockType(player).equals(type)) {
+						// If the game hasn't started yet
+						if(game.getPhase() == 0 || game.getPhase() == 1) {
+							// Paint it but don't add score
+							game.paint(player, false);
+						}
+						// If the game HAS started
+						else if(game.getPhase() == 2) {
+							// Paint it AND add score
+							game.paint(player, true);
+							//game.setScore(player, game.getScore(player) + 1);
+						}
+					}
 
 					if(game.getPhase() == 0 || game.getPhase() == 1 || game.getPhase() == 2)
+						// If the game is running, show particles to all players underneath each player
 						for(Player showTo : Bukkit.getOnlinePlayers())
 							showTo.spawnParticle(Particle.REDSTONE, player.getLocation(), 3, new DustOptions(game.getPlayerColor(player), 1));
 				}
