@@ -2,15 +2,12 @@ package com.nickkhess.painter.game;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
-
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Color;
@@ -22,8 +19,8 @@ import org.bukkit.Material;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.Tag;
 import org.bukkit.World;
+import org.bukkit.attribute.Attribute;
 import org.bukkit.block.Block;
-import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Firework;
 import org.bukkit.entity.Player;
@@ -41,55 +38,48 @@ import org.bukkit.scoreboard.Score;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.ScoreboardManager;
 import org.bukkit.util.Vector;
-
 import com.nickkhess.painter.EventManager;
 import com.nickkhess.painter.Painter;
 import com.nickkhess.painter.events.PlayerPainterStateChangeEvent;
+import com.nickkhess.painter.exceptions.MapInUseException;
+import com.nickkhess.painter.game.map.GameMap;
 import com.nickkhess.painter.game.timers.GameTimer;
-import com.nickkhess.painter.utils.Cuboid;
 
 public class Game {
-	
+
+	public static int numberOfGames = 0;
+
 	private int id;
 
 	private static World world = Bukkit.getWorld("Painter");
 
-	private HashMap<String, String> teams = new HashMap<String, String>();
+	private HashMap<String, String> teams = new HashMap<>();
 
-	private ArrayList<Player> players = new ArrayList<Player>();
-	private static HashMap<Game, GameTimer> games = new HashMap<Game, GameTimer>();
-
-	private final int defaultMaxPlayers = 4;
-	private int maxPlayers = 4;
+	private ArrayList<Player> players = new ArrayList<>();
+	private static HashMap<Game, GameTimer> games = new HashMap<>();
 
 	private int phase = 0;
 
-	private HashMap<OfflinePlayer, Location> preGameLocation = new HashMap<OfflinePlayer, Location>();
-	private HashMap<OfflinePlayer, GameMode> preGameGM = new HashMap<OfflinePlayer, GameMode>();
-	private HashMap<OfflinePlayer, Inventory> preGameInventory = new HashMap<OfflinePlayer, Inventory>();
+	private HashMap<OfflinePlayer, Location> preGameLocation = new HashMap<>();
+	private HashMap<OfflinePlayer, GameMode> preGameGM = new HashMap<>();
+	private HashMap<OfflinePlayer, Inventory> preGameInventory = new HashMap<>();
 
-	private HashMap<OfflinePlayer, Integer> bonus = new HashMap<OfflinePlayer, Integer>();
+	private HashMap<OfflinePlayer, Integer> bonus = new HashMap<>();
 
 	private ScoreboardManager scoreboardManager = Bukkit.getScoreboardManager();
 	private Scoreboard scoreboard = scoreboardManager.getNewScoreboard();
 	private Objective objective = scoreboard.registerNewObjective("Painter", "dummy", "Painter");
 
-	private HashMap<Player, Integer> scores = new HashMap<Player, Integer>();
-
-	private FileConfiguration config = Painter.plugin.getConfig();
-	private Cuboid region = new Cuboid((Location) config.get("point1"), (Location) config.get("point2"));
+	private HashMap<Player, Integer> scores = new HashMap<>();
 
 	private Player winner = null;
 
 	private GameTimer timer;
 
-	private Location preGameSpawn = (Location) config.get("preGameSpawn");
-	private Location inGameSpawn = (Location) config.get("inGameSpawn");
+	private GameMap gameMap;
 
-	public Game(int offX, int offY, int offZ) {
-		region = region.copy(offX, offY, offZ);
-		preGameSpawn = preGameSpawn.add(offX, offY, offZ);
-
+	public Game(GameMap gameMap) {
+		this.gameMap = gameMap;
 		GameTimer t = new GameTimer(this);
 		games.put(this, t);
 		timer = t;
@@ -97,7 +87,7 @@ public class Game {
 		reset(true, true, true, true);
 	}
 
-	public String sendPlayerInStatusMessage(Player player, boolean join) { 
+	public String sendPlayerInStatusMessage(Player player, boolean join) {
 		ChatColor playerColor = ChatColor.RED;
 		playerColor = getChatColor(player);
 
@@ -108,12 +98,13 @@ public class Game {
 			messageColor = ChatColor.RED;
 			sub = 1;
 		}
-		return messageColor + "(" + playerColor + (players.size() - sub) + messageColor + "/" + playerColor + maxPlayers + messageColor + ")";
+		return messageColor + "(" + playerColor + (players.size() - sub) + messageColor + "/" + playerColor
+				+ gameMap.getNumberOfPlayers() + messageColor + ")";
 	}
 
 	public void addPlayer(Player player) {
 		if(!isInGame(player)) {
-			if(players.size() < maxPlayers) {
+			if(players.size() < gameMap.getNumberOfPlayers()) {
 				if(phase < 1) {
 					if(players.size() == 0)
 						for(Player p : players) {
@@ -127,21 +118,28 @@ public class Game {
 
 					player.setScoreboard(scoreboard);
 					preGameLocation.put(player, player.getLocation());
-					player.teleport(preGameSpawn);
+					player.teleport(gameMap.getLobbySpawn());
 					for(Player pl : players)
-						pl.sendMessage(getChatColor(player) + player.getName() + ChatColor.YELLOW + " has joined! " + sendPlayerInStatusMessage(player, true));
+						pl.sendMessage(getChatColor(player) + player.getName() + ChatColor.YELLOW + " has joined! "
+								+ sendPlayerInStatusMessage(player, true));
 
-					if(players.size() == maxPlayers)
+					if(players.size() == gameMap.getNumberOfPlayers())
 						start();
 
+					// Store pregame stuff
 					preGameGM.put(player, player.getGameMode());
 					preGameInventory.put(player, player.getInventory());
+
+					// Set player properties
 					player.getInventory().clear();
 					player.setGameMode(GameMode.ADVENTURE);
 					player.setExp(0);
 					player.setLevel(0);
 					player.setHealth(20);
 					player.setSaturation(20);
+					player.setCollidable(true);
+					player.getAttribute(Attribute.GENERIC_KNOCKBACK_RESISTANCE)
+							.setBaseValue(gameMap.getKnockbackFactor());
 
 					ItemStack helmet = new ItemStack(Material.LEATHER_HELMET);
 					ItemStack chestplate = new ItemStack(Material.LEATHER_CHESTPLATE);
@@ -193,18 +191,19 @@ public class Game {
 
 				for(Player pl : players)
 					if(pl != player)
-						pl.sendMessage(getChatColor(player) + player.getName() + ChatColor.RED + " has left" + (reset ? " and the countdown was cancelled" : "") + "! " + sendPlayerInStatusMessage(player, false));
+						pl.sendMessage(getChatColor(player) + player.getName() + ChatColor.RED + " has left"
+								+ (reset ? " and the countdown was cancelled" : "") + "! "
+								+ sendPlayerInStatusMessage(player, false));
 
 				player.sendMessage(getChatColor(player) + player.getName() + ChatColor.RED + " has left!");
 
 				if(reset)
 					reset(false, false, false, true);
 			}
-			else {
-				if(!isSpectator(player)) 
-					for(Player pl : players)
-						pl.sendMessage(getChatColor(player) + player.getName() + ChatColor.RED + " pixelated into thin air!");
-			}
+			else if(!isSpectator(player))
+				for(Player pl : players)
+					pl.sendMessage(
+							getChatColor(player) + player.getName() + ChatColor.RED + " pixelated into thin air!");
 		}
 		else if(type == 1) {
 			player.setGameMode(GameMode.CREATIVE);
@@ -214,6 +213,7 @@ public class Game {
 			Painter.players.remove(player);
 		}
 		if(type == 0 || type == 2) {
+			// Restore player attributes
 			if(tp)
 				player.teleport(preGameLocation.get(player));
 			player.setGameMode(preGameGM.get(player));
@@ -223,6 +223,7 @@ public class Game {
 			preGameInventory.remove(player);
 			player.setScoreboard(scoreboardManager.getNewScoreboard());
 			player.setLevel(0);
+			player.getAttribute(Attribute.GENERIC_KNOCKBACK_RESISTANCE).setBaseValue(1.0f);
 
 			players.remove(player);
 			Painter.players.remove(player);
@@ -235,32 +236,34 @@ public class Game {
 
 	}
 
-	public boolean isPlayer(Player p) {
-		return players.contains(p) && !isSpectator(p);
+	public boolean isPlayer(Player player) {
+		return players.contains(player) && !isSpectator(player);
 	}
 
-	public boolean isSpectator(Player p) {
-		return p.getGameMode().equals(GameMode.CREATIVE);
+	public boolean isSpectator(Player player) {
+		return player.getGameMode().equals(GameMode.CREATIVE);
 	}
 
-	public String getPlayerTeam(Player p) {
+	public String getPlayerTeam(Player player) {
 		for(String team : teams.keySet())
-			if(teams.get(team).equals(p.getUniqueId().toString()))
+			if(teams.get(team).equals(player.getUniqueId().toString()))
 				return team;
 		return "None";
 	}
 
 	public boolean isFull() {
-		return (players.size() == maxPlayers);
+		return players.size() == gameMap.getNumberOfPlayers();
 	}
 
-	public void reset(boolean removePlayers, final boolean resetWool, final boolean resetTeams, final boolean resetTimer) {
-		if(removePlayers)
+	public void reset(boolean removePlayers, final boolean resetWool, final boolean resetTeams,
+			final boolean resetTimer) {
+		if(removePlayers) {
 			for(Player p : players) {
 				removeScore(p);
-				removePlayer(p, 0, true);
 				p.setLevel(0);
 			}
+			players.clear();
+		}
 
 		if(resetTeams) {
 			teams.put("RED", "");
@@ -268,37 +271,35 @@ public class Game {
 			teams.put("YELLOW", "");
 			teams.put("GREEN", "");
 		}
-		
-		maxPlayers = defaultMaxPlayers;
-		
 
 		BukkitScheduler scheduler = Bukkit.getScheduler();
-		scheduler.scheduleSyncDelayedTask(Painter.plugin, new Runnable() {
-			@Override
-			public void run() {
+		scheduler.scheduleSyncDelayedTask(Painter.plugin, () -> {
 
-				if(resetWool)
-					for(Block block : region.getBlocks())
-						if(Tag.WOOL.isTagged(block.getType())) {
-							block.setType(Material.WHITE_WOOL);
-						}
+			if(resetWool)
+				for(Block block : gameMap.getRegion().getBlocks())
+					if(Tag.WOOL.isTagged(block.getType()))
+						block.setType(Material.WHITE_WOOL);
 
-				if(resetTimer)
-					if(phase == 0) {
-						timer.reset();
-					}
+			if(resetTimer)
+				if(phase == 0)
+					timer.reset();
 
-				phase = 0;
-			}
+			phase = 0;
 		}, 20L);
+
+		gameMap.setInUse(false);
 	}
 
 	public ChatColor chatColor(String team) {
 		switch(team) {
-		case "RED": return ChatColor.RED;
-		case "BLUE": return ChatColor.BLUE;
-		case "YELLOW": return ChatColor.YELLOW;
-		case "GREEN": return ChatColor.GREEN;
+		case "RED":
+			return ChatColor.RED;
+		case "BLUE":
+			return ChatColor.BLUE;
+		case "YELLOW":
+			return ChatColor.YELLOW;
+		case "GREEN":
+			return ChatColor.GREEN;
 		}
 		return ChatColor.WHITE;
 	}
@@ -309,10 +310,14 @@ public class Game {
 
 	public Color getTeamColor(String team) {
 		switch(team) {
-		case "RED": return Color.RED;
-		case "BLUE": return Color.BLUE;
-		case "YELLOW": return Color.YELLOW;
-		case "GREEN": return Color.GREEN;
+		case "RED":
+			return Color.RED;
+		case "BLUE":
+			return Color.BLUE;
+		case "YELLOW":
+			return Color.YELLOW;
+		case "GREEN":
+			return Color.GREEN;
 		}
 		return Color.WHITE;
 	}
@@ -322,7 +327,7 @@ public class Game {
 	}
 
 	private void randomTeam(Player p) {
-		ArrayList<String> available = new ArrayList<String>();
+		ArrayList<String> available = new ArrayList<>();
 		for(String t : teams.keySet())
 			if(teams.get(t).equals(""))
 				available.add(t);
@@ -341,25 +346,24 @@ public class Game {
 
 		ChatColor c = getChatColor(p);
 
-		LinkedHashMap<Player, Integer> scores = new LinkedHashMap<Player, Integer>();
+		LinkedHashMap<Player, Integer> scores = new LinkedHashMap<>();
 
 		p.sendMessage(c + "-------------------------------------------------");
 		p.sendMessage(c + "                              Painter");
 		scores.putAll(this.scores);
 
-		List<Entry<Player, Integer>> entries =
-				new ArrayList<Map.Entry<Player, Integer>>(scores.entrySet());
+		List<Entry<Player, Integer>> entries = new ArrayList<>(scores.entrySet());
 
-		Collections.sort(entries, new Comparator<Map.Entry<Player, Integer>>() {
-			public int compare(Map.Entry<Player, Integer> a, Map.Entry<Player, Integer> b){
-				return b.getValue().compareTo(a.getValue());
-			}
-		});
+		Collections.sort(entries, (a, b) -> b.getValue().compareTo(a.getValue()));
 		for(Entry<Player, Integer> entry : entries) {
 			entryNum++;
-			String place = (entryNum == 1 ? ChatColor.DARK_AQUA + "1st" : (entryNum == 2 ? ChatColor.AQUA + "2nd" : (entryNum == 3 ? ChatColor.BLUE + "3rd" : ChatColor.YELLOW + "4th"))) + ChatColor.WHITE + " - ";
+			String place = (entryNum == 1 ? ChatColor.DARK_AQUA + "1st"
+					: entryNum == 2 ? ChatColor.AQUA + "2nd"
+							: entryNum == 3 ? ChatColor.BLUE + "3rd" : ChatColor.YELLOW + "4th")
+					+ ChatColor.WHITE + " - ";
 			if(!(entryNum >= 4)) {
-				p.sendMessage("              " + place + getChatColor(entry.getKey()) + entry.getKey().getName() + ChatColor.WHITE + " - " + entry.getValue());
+				p.sendMessage("              " + place + getChatColor(entry.getKey()) + entry.getKey().getName()
+						+ ChatColor.WHITE + " - " + entry.getValue());
 				bonus.put(Bukkit.getOfflinePlayer(ChatColor.stripColor(p.getName())), (3 - entryNum) * 10);
 			}
 		}
@@ -371,19 +375,14 @@ public class Game {
 	BukkitScheduler scheduler = Bukkit.getScheduler();
 
 	private void awardTokens(final Player p) {
-		scheduler.scheduleSyncDelayedTask(Painter.plugin, new Runnable() {
+		scheduler.scheduleSyncDelayedTask(Painter.plugin, () -> {
+			int tokensEarned = scores.get(p) / 10 + bonus.get(p);
 
-			@Override
-			public void run() {
-				int tokensEarned = ((int)(scores.get(p) / 10)) + bonus.get(p);
+			p.sendMessage(getChatColor(p) + "-------------------------------------------------");
+			p.sendMessage(ChatColor.GOLD + "You earned " + tokensEarned + " tokens!");
+			p.sendMessage(getChatColor(p) + "-------------------------------------------------");
 
-				p.sendMessage(getChatColor(p) + "-------------------------------------------------");
-				p.sendMessage(ChatColor.GOLD + "You earned " + tokensEarned + " tokens!");
-				p.sendMessage(getChatColor(p) + "-------------------------------------------------");
-
-				Bukkit.getServer().dispatchCommand(Bukkit.getConsoleSender(), "tokens " + p.getName() + " " +  tokensEarned);
-			}
-
+			Bukkit.getServer().dispatchCommand(Bukkit.getConsoleSender(), "tokens " + p.getName() + " " + tokensEarned);
 		}, 80);
 	}
 
@@ -391,70 +390,78 @@ public class Game {
 		Firework fw = (Firework) player.getWorld().spawnEntity(player.getLocation(), EntityType.FIREWORK);
 		FireworkMeta fwm = fw.getFireworkMeta();
 
-		Random r = new Random();   
+		Random r = new Random();
 
 		int randomType = r.nextInt(5);
-		Type type = Type.BALL;     
+		Type type = Type.BALL;
 
 		switch(randomType) {
-		case 0: type = Type.BALL;
-		break;
-		case 1: type = Type.BALL_LARGE;
-		break;
-		case 2: type = Type.BURST;
-		break;
-		case 3: type = Type.CREEPER;
-		break;
-		case 4: type = Type.STAR;
-		break;
+		case 0:
+			type = Type.BALL;
+			break;
+		case 1:
+			type = Type.BALL_LARGE;
+			break;
+		case 2:
+			type = Type.BURST;
+			break;
+		case 3:
+			type = Type.CREEPER;
+			break;
+		case 4:
+			type = Type.STAR;
+			break;
 		}
 
-		FireworkEffect effect = FireworkEffect.builder().withColor(getPlayerColor(player)).with(type).trail(r.nextBoolean()).build();
+		FireworkEffect effect = FireworkEffect.builder().withColor(getPlayerColor(player)).with(type)
+				.trail(r.nextBoolean()).build();
 
 		fwm.addEffect(effect);
 
 		fwm.setPower(1);
 
-		fw.setFireworkMeta(fwm);  	
+		fw.setFireworkMeta(fwm);
 	}
 
-	public static void addToAvailable(Player p) {
+	public static void addToAvailable(Player player) {
 		if(!games.isEmpty())
 			for(Game game : games.keySet()) {
 				if(!game.isFull() && game.phase <= 1) {
-					if(!game.players.contains(p)) {
-						game.addPlayer(p);
+					if(!game.players.contains(player)) {
+						game.addPlayer(player);
 						break;
 					}
 					else {
-						createNewGame().addPlayer(p);
+						createNewGame().addPlayer(player);
 						break;
 					}
 				}
 				else
-					createNewGame().addPlayer(p);
+					createNewGame().addPlayer(player);
 			}
 		else
-			createNewGame().addPlayer(p);
+			createNewGame().addPlayer(player);
 	}
 
-	public static Game createAndAdd(final Player p) {
+	public static Game createAndAdd(final Player player) {
 		final Game g = createNewGame();
-
-		Bukkit.getScheduler().scheduleSyncDelayedTask(Painter.plugin, new Runnable() {
-
-			@Override
-			public void run() {
-				g.addPlayer(p);
-			}
-
-		}, 5);
-
+		Bukkit.getScheduler().scheduleSyncDelayedTask(Painter.plugin, () -> g.addPlayer(player), 5);
 		return g;
 	}
 
-	public static Game createNewGame() {
-		Game game = new Game(games.size()*1000, 0, 0);
+	public static Game createAndAdd(Player player, GameMap gameMap) throws MapInUseException {
+		Game game = createNewGame(gameMap);
+		Bukkit.getScheduler().scheduleSyncDelayedTask(Painter.plugin, () -> game.addPlayer(player), 5);
+		return game;
+	}
+
+	private static Game createNewGame(GameMap gameMap) throws MapInUseException {
+		Game game = null;
+		if(!gameMap.isInUse())
+			game = new Game(gameMap);
+		else
+			throw new MapInUseException();
+
 		GameTimer timer = games.get(game);
 		timer.runTaskTimer(Painter.plugin, 0, 20);
 		game.timer = timer;
@@ -467,9 +474,30 @@ public class Game {
 		return game;
 	}
 
-	public static boolean isInGame(Player p) {
+	public static Game createNewGame() {
+		Game game = null;
+		for(GameMap gameMap : GameMap.gameMaps)
+			if(!gameMap.isInUse()) {
+				game = new Game(gameMap);
+				gameMap.setInUse(true);
+				break;
+			}
+
+		GameTimer timer = games.get(game);
+		timer.runTaskTimer(Painter.plugin, 0, 20);
+		game.timer = timer;
+		game.id = games.size() + 1;
+		game.teams.put("RED", "");
+		game.teams.put("BLUE", "");
+		game.teams.put("YELLOW", "");
+		game.teams.put("GREEN", "");
+
+		return game;
+	}
+
+	public static boolean isInGame(Player player) {
 		for(Game g : games.keySet())
-			if(g.isPlayer(p))
+			if(g.isPlayer(player))
 				return true;
 
 		return false;
@@ -510,72 +538,74 @@ public class Game {
 	}
 
 	public void start() {
-		maxPlayers = players.size();
 		phase = 1;
 		objective.setDisplaySlot(DisplaySlot.SIDEBAR);
-		objective.setDisplayName(String.format("%sP%sA%sI%sN%sT%sE%sR", 
-				ChatColor.RED, ChatColor.GOLD, ChatColor.YELLOW, ChatColor.GREEN, ChatColor.AQUA, ChatColor.BLUE, ChatColor.LIGHT_PURPLE));
+		objective.setDisplayName(String.format("%sP%sA%sI%sN%sT%sE%sR", ChatColor.RED, ChatColor.GOLD, ChatColor.YELLOW,
+				ChatColor.GREEN, ChatColor.AQUA, ChatColor.BLUE, ChatColor.LIGHT_PURPLE));
 		for(Player pl : players) {
 			Score score = objective.getScore(getChatColor(pl) + pl.getName());
 			score.setScore(0);
 		}
 	}
 
-	public void paint(Player player, boolean addscore) {
+	public void paint(Player player, boolean addScore) {
 		if(Game.isInGame(player)) {
 			Game game = Game.getGame(player);
-			if(!game.isSpectator(player)) {
+			if(!game.isSpectator(player) && game.gameMap.getRegion().contains(player.getLocation())) {
 				Block block = player.getLocation().subtract(0, 1, 0).getBlock();
-				block.setType(game.getPlayerBlockType(player));
-				if(addscore) {
+				if(addScore) {
 					game.setScore(player, game.scores.get(player) + 1);
+
+					// Subtract points from the player whose block got replaced, if applicable
 					for(Player gamePlayer : game.players)
-						if(game.getPlayerBlockType(gamePlayer) == block.getType() && player != gamePlayer)
-							game.setScore(gamePlayer, game.scores.get(gamePlayer) - 1);
+						if(game.getPlayerBlockType(gamePlayer).equals(block.getType()))
+							if(player != gamePlayer)
+								game.setScore(gamePlayer, game.scores.get(gamePlayer) - 1);
 					Sounds.playPaintSound(player);
 				}
+				block.setType(game.getPlayerBlockType(player));
 			}
 		}
 	}
 
-	public void splatterPaint(Player p) {
-		if(Game.isInGame(p)) {
-			Game g = Game.getGame(p);
-			if(!g.isSpectator(p))
+	public void splatterPaint(Player player) {
+		if(Game.isInGame(player)) {
+			Game g = Game.getGame(player);
+			if(!g.isSpectator(player))
 				for(int i = 0; i < 8; i++)
-					Painter.launchedMobs.put(launchMob(p.getLocation(), 1), p);
+					Painter.launchedMobs.put(launchSilverfish(player.getLocation(), 1), player);
 		}
 	}
 
 	public void rainColors(Player hitter, Player hit) {
-
 		int num1 = ThreadLocalRandom.current().nextInt(7, 10);
 		int num2 = new Random().nextInt(3);
 
 		for(int i = 0; i < num1; i++)
-			Painter.launchedMobs.put(launchMob(inGameSpawn, 3), hitter);
+			Painter.launchedMobs.put(launchSilverfish(gameMap.getGameSpawn(), 3), hitter);
 
 		for(int i = 0; i < num2; i++)
-			Painter.launchedMobs.put(launchMob(inGameSpawn, 3), hit);
+			Painter.launchedMobs.put(launchSilverfish(gameMap.getGameSpawn(), 3), hit);
 	}
 
 	public int getID() {
 		return id;
 	}
 
-	private Silverfish launchMob(Location l, int multiply) {
+	private Silverfish launchSilverfish(Location location, int multiply) {
 		Random r = new Random();
-		float x = (r.nextFloat()*.5f);
-		float y = (r.nextFloat()*.2f) + .4f;
-		float z = (r.nextFloat()*.5f);
+		float x = r.nextFloat() * .5f;
+		float y = r.nextFloat() * .2f + .4f;
+		float z = r.nextFloat() * .5f;
 
-		Silverfish s = (Silverfish) world.spawnEntity(l.add(0, 1, 0), EntityType.SILVERFISH);
+		Silverfish silverfish = (Silverfish) world.spawnEntity(location.add(0, 1, 0), EntityType.SILVERFISH);
 
-		s.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, 9999, 2, false, true));
+		silverfish.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, 9999, 2, false, false));
+		silverfish.setVelocity(new Vector(x, y, z));
+		silverfish.setSilent(true);
+		silverfish.setCollidable(false);
 
-		s.setVelocity(new Vector(x, y, z));
-
-		return s;
+		return silverfish;
 	}
 
 	public Player getPlayerByBlockType(Material material) {
@@ -615,8 +645,8 @@ public class Game {
 		return scores;
 	}
 
-	public Location getInGameSpawn() {
-		return inGameSpawn;
+	public Location getGameSpawn() {
+		return gameMap.getGameSpawn();
 	}
 
 	public int getPhase() {
@@ -649,6 +679,17 @@ public class Game {
 
 	public static void setGames(HashMap<Game, GameTimer> games) {
 		Game.games = games;
+	}
+
+	public GameMap getGameMap() {
+		return gameMap;
+	}
+
+	public void teleportToGameSpawn(Player player) {
+		if(isPlayer(player)) {
+			player.teleport(getGameSpawn());
+			player.setFallDistance(0);
+		}
 	}
 
 }
